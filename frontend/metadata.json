@@ -1,0 +1,5 @@
+{
+  "name": "TeamTask Notion",
+  "description": "A collaborative task management tool with multiple projects and Kanban boards, inspired by Notion.",
+  "requestFramePermissions": []
+}
