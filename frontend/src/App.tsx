@@ -34,6 +34,9 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { Project, Task, Status, Member } from './types';
+import { projectService } from './services/projectService';
+import { taskService } from './services/taskService';
+import { memberService } from './services/memberService';
 
 // --- Constants ---
 const TEAM_MEMBERS: Member[] = [
@@ -119,25 +122,34 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, theme =
 const DraggableAny = Draggable as any;
 const DroppableAny = Droppable as any;
 
+const isOverdue = (task: Task) => {
+  if (!task.deadline || task.status === 'done') return false;
+  return new Date(task.deadline) < new Date();
+};
+
 export default function App() {
   // --- State ---
-  const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem('notion_projects');
-    return saved ? JSON.parse(saved) : INITIAL_PROJECTS;
-  });
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [members, setMembers] = useState<Member[]>(TEAM_MEMBERS);
   
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    const saved = localStorage.getItem('notion_tasks');
-    return saved ? JSON.parse(saved) : INITIAL_TASKS;
-  });
-
-  const [activeProjectId, setActiveProjectId] = useState<string>(projects[0]?.id || '');
+  const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('notion_theme');
     return (saved as 'light' | 'dark') || 'light';
   });
+  
+  // Loading States
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  
+  // Operation Loading States
+  const [isCreating, setIsCreating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
   
   // Modal States
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
@@ -145,14 +157,6 @@ export default function App() {
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
 
   // --- Persistence ---
-  useEffect(() => {
-    localStorage.setItem('notion_projects', JSON.stringify(projects));
-  }, [projects]);
-
-  useEffect(() => {
-    localStorage.setItem('notion_tasks', JSON.stringify(tasks));
-  }, [tasks]);
-
   useEffect(() => {
     localStorage.setItem('notion_theme', theme);
     if (theme === 'dark') {
@@ -162,6 +166,73 @@ export default function App() {
     }
   }, [theme]);
 
+  // --- Debounce Search ---
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // --- Toast Auto-dismiss ---
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  // --- Fetch Data ---
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        const [projectsData, membersData] = await Promise.all([
+          projectService.getAll(),
+          memberService.getAll().catch(() => [])
+        ]);
+        
+        setProjects(projectsData);
+        if (membersData.length > 0) {
+          setMembers(membersData);
+        }
+        
+        if (projectsData.length > 0) {
+          setActiveProjectId(projectsData[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to fetch data:', err);
+        setError('Failed to connect to server. Using local data.');
+        setProjects(INITIAL_PROJECTS);
+        setTasks(INITIAL_TASKS);
+        setActiveProjectId(INITIAL_PROJECTS[0]?.id || '');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, []);
+
+  // --- Fetch Tasks when project changes ---
+  useEffect(() => {
+    const fetchTasks = async () => {
+      if (!activeProjectId) return;
+      
+      try {
+        const tasksData = await taskService.getAll(activeProjectId);
+        setTasks(tasksData);
+      } catch (err) {
+        console.error('Failed to fetch tasks:', err);
+        setTasks(INITIAL_TASKS.filter(t => t.projectId === activeProjectId));
+      }
+    };
+    
+    fetchTasks();
+  }, [activeProjectId]);
+
   // --- Derived State ---
   const activeProject = useMemo(() => 
     projects.find(p => p.id === activeProjectId), 
@@ -169,34 +240,55 @@ export default function App() {
   );
 
   const filteredTasks = useMemo(() => {
-    return tasks.filter(t => 
-      t.projectId === activeProjectId && 
-      (t.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-       t.description.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-  }, [tasks, activeProjectId, searchQuery]);
+    return tasks
+      .filter(t => 
+        t.projectId === activeProjectId && 
+        (t.title.toLowerCase().includes(debouncedSearch.toLowerCase()) || 
+         t.description.toLowerCase().includes(debouncedSearch.toLowerCase()))
+      )
+      .sort((a, b) => {
+        if (a.deadline && b.deadline) {
+          return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
+        }
+        if (a.deadline) return -1;
+        if (b.deadline) return 1;
+        const priorityOrder = { high: 0, medium: 1, low: 2 };
+        return priorityOrder[a.priority] - priorityOrder[b.priority];
+      });
+  }, [tasks, activeProjectId, debouncedSearch]);
+
+  const projectTaskCounts = useMemo(() => {
+    return tasks.reduce((acc, task) => {
+      acc[task.projectId] = (acc[task.projectId] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [tasks]);
 
   // --- Handlers ---
-  const onDragEnd = (result: DropResult) => {
+  const onDragEnd = async (result: DropResult) => {
     const { destination, source, draggableId } = result;
 
     if (!destination) return;
     if (destination.droppableId === source.droppableId && destination.index === source.index) return;
 
-    const newTasks: Task[] = Array.from(tasks);
-    const taskIndex = newTasks.findIndex((t: Task) => t.id === draggableId);
-    if (taskIndex === -1) return;
+    const newStatus = destination.droppableId as Status;
+    
+    // Optimistic update
+    setTasks(tasks.map(t => 
+      t.id === draggableId ? { ...t, status: newStatus } : t
+    ));
 
-    // Update status
-    newTasks[taskIndex] = {
-      ...newTasks[taskIndex],
-      status: destination.droppableId as Status
-    };
-
-    setTasks(newTasks);
+    try {
+      await taskService.updateStatus(draggableId, newStatus);
+    } catch (err) {
+      console.error('Failed to update task status:', err);
+      // Revert on error
+      const tasksData = await taskService.getAll(activeProjectId);
+      setTasks(tasksData);
+    }
   };
 
-  const handleAddProject = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAddProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const name = formData.get('name') as string;
@@ -204,28 +296,56 @@ export default function App() {
 
     if (!name) return;
 
-    const newProject: Project = {
-      id: Math.random().toString(36).substr(2, 9),
-      name,
-      icon: icon || '📁'
-    };
+    setError(null);
 
-    setProjects([...projects, newProject]);
-    setActiveProjectId(newProject.id);
+    try {
+      const newProject = await projectService.create({ name, icon: icon || '📁' });
+      setProjects([...projects, newProject]);
+      setActiveProjectId(newProject.id);
+      setToast('Project created');
+    } catch (err) {
+      console.error('Failed to create project:', err);
+      setError('Failed to create project');
+      const localProject: Project = {
+        id: Math.random().toString(36).substr(2, 9),
+        name,
+        icon: icon || '📁'
+      };
+      setProjects([...projects, localProject]);
+      setActiveProjectId(localProject.id);
+    }
+    
     setIsProjectModalOpen(false);
   };
 
-  const handleDeleteProject = (id: string) => {
+  const handleDeleteProject = async (id: string) => {
     if (projects.length <= 1) return;
-    const newProjects = projects.filter(p => p.id !== id);
-    setProjects(newProjects);
-    setTasks(tasks.filter(t => t.projectId !== id));
-    if (activeProjectId === id) {
-      setActiveProjectId(newProjects[0].id);
+    
+    setError(null);
+
+    try {
+      await projectService.delete(id);
+      setProjects(projects.filter(p => p.id !== id));
+      setTasks(tasks.filter(t => t.projectId !== id));
+      setToast('Project deleted');
+      
+      if (activeProjectId === id) {
+        const remainingProjects = projects.filter(p => p.id !== id);
+        setActiveProjectId(remainingProjects[0]?.id || '');
+      }
+    } catch (err) {
+      console.error('Failed to delete project:', err);
+      setError('Failed to delete project');
+      const newProjects = projects.filter(p => p.id !== id);
+      setProjects(newProjects);
+      setTasks(tasks.filter(t => t.projectId !== id));
+      if (activeProjectId === id) {
+        setActiveProjectId(newProjects[0]?.id || '');
+      }
     }
   };
 
-  const handleSaveTask = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveTask = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const title = formData.get('title') as string;
@@ -237,37 +357,85 @@ export default function App() {
 
     if (!title) return;
 
-    if (editingTask) {
-      setTasks(tasks.map(t => t.id === editingTask.id ? {
-        ...t,
-        title,
-        description,
-        priority,
-        status,
-        assigneeId,
-        deadline
-      } : t));
-    } else {
-      const newTask: Task = {
-        id: Math.random().toString(36).substr(2, 9),
-        projectId: activeProjectId,
-        title,
-        description,
-        status: status || 'todo',
-        priority: priority || 'medium',
-        assigneeId,
-        deadline,
-        createdAt: Date.now()
-      };
-      setTasks([...tasks, newTask]);
+    setIsCreating(true);
+    setError(null);
+
+    try {
+      if (editingTask) {
+        const updatedTask = await taskService.update(editingTask.id, {
+          title,
+          description,
+          priority,
+          status,
+          assigneeId: assigneeId || undefined,
+          deadline: deadline || undefined,
+        });
+        setTasks(tasks.map(t => t.id === editingTask.id ? updatedTask : t));
+        setToast('Task updated successfully');
+      } else {
+        const newTask = await taskService.create({
+          projectId: activeProjectId,
+          title,
+          description,
+          status: status || 'todo',
+          priority: priority || 'medium',
+          assigneeId: assigneeId || undefined,
+          deadline: deadline || undefined,
+        });
+        setTasks([...tasks, newTask]);
+        setToast('Task created successfully');
+      }
+    } catch (err) {
+      console.error('Failed to save task:', err);
+      setError('Failed to save task. Changes not saved.');
+      if (editingTask) {
+        setTasks(tasks.map(t => t.id === editingTask.id ? {
+          ...t,
+          title,
+          description,
+          priority,
+          status,
+          assigneeId: assigneeId || undefined,
+          deadline: deadline || undefined,
+        } : t));
+      } else {
+        const localTask: Task = {
+          id: Math.random().toString(36).substr(2, 9),
+          projectId: activeProjectId,
+          title,
+          description,
+          status: status || 'todo',
+          priority: priority || 'medium',
+          assigneeId: assigneeId || undefined,
+          deadline: deadline || undefined,
+          createdAt: Date.now()
+        };
+        setTasks([...tasks, localTask]);
+      }
+    } finally {
+      setIsCreating(false);
     }
 
     setIsTaskModalOpen(false);
     setEditingTask(null);
   };
 
-  const deleteTask = (id: string) => {
+  const deleteTask = async (id: string) => {
+    setIsDeleting(id);
+    setError(null);
+    const previousTasks = tasks;
     setTasks(tasks.filter(t => t.id !== id));
+    
+    try {
+      await taskService.delete(id);
+      setToast('Task deleted');
+    } catch (err) {
+      console.error('Failed to delete task:', err);
+      setError('Failed to delete task');
+      setTasks(previousTasks);
+    } finally {
+      setIsDeleting(null);
+    }
   };
 
   return (
@@ -319,6 +487,14 @@ export default function App() {
               <div className="flex items-center gap-2 overflow-hidden">
                 <span className="text-lg">{project.icon}</span>
                 <span className="truncate font-medium">{project.name}</span>
+                {projectTaskCounts[project.id] > 0 && (
+                  <span className={cn(
+                    "ml-auto text-xs px-1.5 py-0.5 rounded-full",
+                    theme === 'dark' ? "bg-slate-700 text-slate-400" : "bg-slate-200 text-slate-500"
+                  )}>
+                    {projectTaskCounts[project.id]}
+                  </span>
+                )}
               </div>
               <button 
                 onClick={(e) => {
@@ -446,8 +622,44 @@ export default function App() {
           </div>
         </header>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="px-6 py-2 bg-red-50 border-b border-red-200 text-red-700 text-sm flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">×</button>
+          </div>
+        )}
+
+        {/* Toast Notification */}
+        {toast && (
+          <div className="fixed bottom-4 right-4 px-4 py-2 bg-emerald-500 text-white rounded-lg shadow-lg z-50 animate-pulse">
+            {toast}
+          </div>
+        )}
+
+        {/* Loading Skeleton */}
+        {isLoading && (
+          <div className="flex-1 overflow-x-auto overflow-y-hidden p-6">
+            <div className="flex gap-6 h-full min-w-max">
+              {COLUMNS.map(column => (
+                <div key={column.id} className="w-80 flex flex-col shrink-0">
+                  <div className="h-8 bg-slate-200 rounded mb-4 animate-pulse dark:bg-slate-700" />
+                  <div className="space-y-3">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className={cn(
+                        "h-40 rounded-xl animate-pulse",
+                        theme === 'dark' ? "bg-slate-800" : "bg-slate-100"
+                      )} />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Kanban Board */}
-        <div className="flex-1 overflow-x-auto overflow-y-hidden p-6">
+        {!isLoading && <div className="flex-1 overflow-x-auto overflow-y-hidden p-6">
           <DragDropContext onDragEnd={onDragEnd}>
             <div className="flex gap-6 h-full min-w-max">
               {COLUMNS.map(column => (
@@ -502,7 +714,8 @@ export default function App() {
                                       theme === 'dark' 
                                         ? "bg-slate-900 border-slate-800 hover:border-slate-700" 
                                         : "bg-white border-slate-200",
-                                      snapshot.isDragging ? "shadow-xl ring-2 ring-blue-500/20 rotate-1 z-50" : ""
+                                      snapshot.isDragging ? "shadow-xl ring-2 ring-blue-500/20 rotate-1 z-50" : "",
+                                      isOverdue(task) ? "ring-2 ring-red-500/50" : ""
                                     )}
                                   >
                                     <div className="flex items-start justify-between mb-2">
@@ -529,12 +742,18 @@ export default function App() {
                                         </button>
                                         <button 
                                           onClick={() => deleteTask(task.id)}
+                                          disabled={isDeleting === task.id}
                                           className={cn(
                                             "p-1 rounded transition-colors",
+                                            isDeleting === task.id ? "opacity-50 cursor-not-allowed" : "",
                                             theme === 'dark' ? "hover:bg-slate-800 text-slate-500 hover:text-red-400" : "hover:bg-slate-100 text-slate-400 hover:text-red-500"
                                           )}
                                         >
-                                          <Trash2 size={14} />
+                                          {isDeleting === task.id ? (
+                                            <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
+                                          ) : (
+                                            <Trash2 size={14} />
+                                          )}
                                         </button>
                                         <div {...provided.dragHandleProps} className="p-1 cursor-grab active:cursor-grabbing text-slate-600">
                                           <GripVertical size={14} />
@@ -555,17 +774,17 @@ export default function App() {
 
                                     {task.deadline && (
                                       <div className={cn(
-                                        "flex items-center gap-1.5 mb-3 transition-colors",
-                                        theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                                        "flex items-center gap-1.5 mb-3 px-2 py-1 rounded text-[10px] font-medium transition-colors",
+                                        isOverdue(task) 
+                                          ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" 
+                                          : theme === 'dark' 
+                                            ? "bg-slate-800 text-slate-500" 
+                                            : "bg-slate-50 text-slate-400"
                                       )}>
-                                        <Calendar size={12} className={cn(
-                                          new Date(task.deadline) < new Date() ? "text-red-500" : ""
-                                        )} />
-                                        <span className={cn(
-                                          "text-[10px] font-medium",
-                                          new Date(task.deadline) < new Date() ? "text-red-500" : ""
-                                        )}>
-                                          Deadline: {new Date(task.deadline).toLocaleDateString()}
+                                        <Calendar size={12} />
+                                        <span>
+                                          {isOverdue(task) ? "Overdue: " : "Due: "}
+                                          {new Date(task.deadline).toLocaleDateString()}
                                         </span>
                                       </div>
                                     )}
@@ -586,13 +805,13 @@ export default function App() {
                                       <div className="flex items-center gap-2">
                                         {task.assigneeId && (
                                           <div 
-                                            title={TEAM_MEMBERS.find(m => m.id === task.assigneeId)?.name}
+                                            title={members.find(m => m.id === task.assigneeId)?.name}
                                             className={cn(
                                               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm",
-                                              TEAM_MEMBERS.find(m => m.id === task.assigneeId)?.color || "bg-slate-400"
+                                              members.find(m => m.id === task.assigneeId)?.color || "bg-slate-400"
                                             )}
                                           >
-                                            {TEAM_MEMBERS.find(m => m.id === task.assigneeId)?.avatar}
+                                            {members.find(m => m.id === task.assigneeId)?.avatar}
                                           </div>
                                         )}
                                       </div>
@@ -611,6 +830,7 @@ export default function App() {
             </div>
           </DragDropContext>
         </div>
+        }
       </main>
 
       {/* Add/Edit Task Modal */}
@@ -671,7 +891,7 @@ export default function App() {
                 )}
               >
                 <option value="">Unassigned</option>
-                {TEAM_MEMBERS.map(m => (
+                {members.map(m => (
                   <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
               </select>
@@ -743,12 +963,21 @@ export default function App() {
             </button>
             <button 
               type="submit"
+              disabled={isCreating}
               className={cn(
-                "flex-1 px-4 py-2 font-medium rounded-lg transition-colors",
+                "flex-1 px-4 py-2 font-medium rounded-lg transition-colors flex items-center justify-center gap-2",
+                isCreating ? "opacity-50 cursor-not-allowed" : "",
                 theme === 'dark' ? "bg-blue-600 text-white hover:bg-blue-500" : "bg-slate-900 text-white hover:bg-slate-800"
               )}
             >
-              {editingTask ? "Save Changes" : "Create Task"}
+              {isCreating ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                editingTask ? "Save Changes" : "Create Task"
+              )}
             </button>
           </div>
         </form>
