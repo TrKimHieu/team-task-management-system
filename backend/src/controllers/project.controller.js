@@ -2,7 +2,7 @@ const projectService = require('../services/project.service');
 
 const getAll = async (req, res) => {
   try {
-    const projects = await projectService.getAll();
+    const projects = await projectService.getAll(req.auth);
     res.json(projects);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -11,13 +11,11 @@ const getAll = async (req, res) => {
 
 const getById = async (req, res) => {
   try {
-    const { id } = req.params;
-    const project = await projectService.getById(id);
-    
+    const project = await projectService.getById(req.params.id, req.auth);
     if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    
+
     res.json(project);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -26,13 +24,19 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { name, icon } = req.body;
-
+    const { name, description, icon } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'name is required' });
     }
 
-    const project = await projectService.create({ name, icon });
+    const project = await projectService.create({
+      name,
+      description,
+      icon,
+      createdBy: req.auth.userId,
+      creatorRole: req.auth.role,
+    });
+
     res.status(201).json(project);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -41,15 +45,11 @@ const create = async (req, res) => {
 
 const update = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { name, icon } = req.body;
-
-    const existingProject = await projectService.getById(id);
-    if (!existingProject) {
+    const project = await projectService.update(req.params.id, req.body, req.auth);
+    if (!project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    const project = await projectService.update(id, { name, icon });
     res.json(project);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -58,13 +58,11 @@ const update = async (req, res) => {
 
 const remove = async (req, res) => {
   try {
-    const { id } = req.params;
-    const deleted = await projectService.remove(id);
-    
+    const deleted = await projectService.remove(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Project not found' });
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -76,5 +74,5 @@ module.exports = {
   getById,
   create,
   update,
-  remove
+  remove,
 };

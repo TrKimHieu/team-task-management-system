@@ -81,13 +81,15 @@ SourceCode/
 ### Option 1: Using Docker (Recommended)
 
 ```bash
-# Start all services (backend + database)
-docker-compose up
+# Build once after changing Dockerfiles or docker-compose.yml
+docker compose up --build
 
-# Frontend (in another terminal)
-cd frontend
-npm install
-npm run dev
+# Later runs can use
+docker compose up
+
+# If an old frontend image is still serving outdated code, rebuild cleanly
+docker compose down
+docker compose up --build
 ```
 
 ### Option 2: Local Development
@@ -144,6 +146,7 @@ DB_PORT=5432
 
 ```env
 VITE_API_URL=http://localhost:8000
+VITE_API_PROXY_TARGET=http://localhost:8000
 ```
 
 ## API Documentation

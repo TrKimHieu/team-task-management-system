@@ -1,12 +1,27 @@
 const taskService = require('../services/task.service');
+const { STATUSES, PRIORITIES } = require('../constants');
 
-const VALID_STATUSES = ['todo', 'in-progress', 'done'];
-const VALID_PRIORITIES = ['low', 'medium', 'high'];
+const validateStatus = (status, res) => {
+  if (status && !STATUSES.includes(status)) {
+    res.status(400).json({ error: `Invalid status. Must be one of: ${STATUSES.join(', ')}` });
+    return false;
+  }
+
+  return true;
+};
+
+const validatePriority = (priority, res) => {
+  if (priority && !PRIORITIES.includes(priority)) {
+    res.status(400).json({ error: `Invalid priority. Must be one of: ${PRIORITIES.join(', ')}` });
+    return false;
+  }
+
+  return true;
+};
 
 const getAll = async (req, res) => {
   try {
-    const { projectId } = req.query;
-    const tasks = await taskService.getAll(projectId);
+    const tasks = await taskService.getAll(req.query.projectId || null);
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -15,13 +30,11 @@ const getAll = async (req, res) => {
 
 const getById = async (req, res) => {
   try {
-    const { id } = req.params;
-    const task = await taskService.getById(id);
-    
+    const task = await taskService.getById(req.params.id);
     if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    
+
     res.json(task);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -30,22 +43,13 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { projectId, title, description, status, priority, assigneeId, deadline } = req.body;
+    const { projectId, title, description, status = 'todo', priority = 'medium', dueDate, assigneeIds = [] } = req.body;
 
     if (!projectId || !title) {
       return res.status(400).json({ error: 'projectId and title are required' });
     }
-
-    if (status && !VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ 
-        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
-      });
-    }
-
-    if (priority && !VALID_PRIORITIES.includes(priority)) {
-      return res.status(400).json({ 
-        error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(', ')}` 
-      });
+    if (!validateStatus(status, res) || !validatePriority(priority, res)) {
+      return;
     }
 
     const task = await taskService.create({
@@ -54,8 +58,9 @@ const create = async (req, res) => {
       description,
       status,
       priority,
-      assigneeId,
-      deadline
+      dueDate,
+      assigneeIds,
+      createdBy: req.auth.userId,
     });
 
     res.status(201).json(task);
@@ -66,34 +71,15 @@ const create = async (req, res) => {
 
 const update = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { title, description, status, priority, assigneeId, deadline } = req.body;
+    const { status, priority } = req.body;
+    if (!validateStatus(status, res) || !validatePriority(priority, res)) {
+      return;
+    }
 
-    const existingTask = await taskService.getById(id);
-    if (!existingTask) {
+    const task = await taskService.update(req.params.id, req.body);
+    if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
-
-    if (status && !VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ 
-        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
-      });
-    }
-
-    if (priority && !VALID_PRIORITIES.includes(priority)) {
-      return res.status(400).json({ 
-        error: `Invalid priority. Must be one of: ${VALID_PRIORITIES.join(', ')}` 
-      });
-    }
-
-    const task = await taskService.update(id, {
-      title,
-      description,
-      status,
-      priority,
-      assigneeId,
-      deadline
-    });
 
     res.json(task);
   } catch (error) {
@@ -103,25 +89,19 @@ const update = async (req, res) => {
 
 const updateStatus = async (req, res) => {
   try {
-    const { id } = req.params;
     const { status } = req.body;
-
     if (!status) {
       return res.status(400).json({ error: 'status is required' });
     }
-
-    if (!VALID_STATUSES.includes(status)) {
-      return res.status(400).json({ 
-        error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` 
-      });
+    if (!validateStatus(status, res)) {
+      return;
     }
 
-    const existingTask = await taskService.getById(id);
-    if (!existingTask) {
+    const task = await taskService.updateStatus(req.params.id, status);
+    if (!task) {
       return res.status(404).json({ error: 'Task not found' });
     }
 
-    const task = await taskService.updateStatus(id, status);
     res.json(task);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -130,13 +110,11 @@ const updateStatus = async (req, res) => {
 
 const remove = async (req, res) => {
   try {
-    const { id } = req.params;
-    const deleted = await taskService.remove(id);
-    
+    const deleted = await taskService.remove(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Task not found' });
     }
-    
+
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -149,5 +127,5 @@ module.exports = {
   create,
   update,
   updateStatus,
-  remove
+  remove,
 };

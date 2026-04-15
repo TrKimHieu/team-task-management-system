@@ -1,4 +1,4 @@
-const db = require('../config/db');
+const db = require('../config/db').pool;
 
 const transformMemberToFrontend = (member) => {
   if (!member) return null;

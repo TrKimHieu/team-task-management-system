@@ -13,11 +13,28 @@ const options = {
     },
     servers: [
       {
-        url: "http://localhost:3000",
+        url: "http://localhost:8000",
         description: "Development server"
       }
     ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT"
+        }
+      }
+    },
     tags: [
+      {
+        name: "Auth",
+        description: "Authentication endpoints"
+      },
+      {
+        name: "Users",
+        description: "User management endpoints"
+      },
       {
         name: "Projects",
         description: "Project management endpoints"
@@ -25,10 +42,6 @@ const options = {
       {
         name: "Tasks",
         description: "Task management endpoints"
-      },
-      {
-        name: "Members",
-        description: "Team member endpoints"
       }
     ]
   },
