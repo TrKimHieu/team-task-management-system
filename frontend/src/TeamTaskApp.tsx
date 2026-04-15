@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, memo, useRef } from 'react';
 import { LogOut, Moon, Plus, Search, Settings, Shield, Sun, User, Users } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { cn } from './lib/utils';
@@ -91,6 +91,100 @@ const getTaskBgClass = (task: Task): string => {
 const getTaskOpacity = (task: Task): string => {
   return '';
 };
+
+interface TaskCardProps {
+  task: Task;
+  index: number;
+  isLeader: boolean;
+  theme: ThemeMode;
+  authUser: AuthUser;
+  activeProject: Project | null;
+  onToggle: (taskId: string, completed: boolean) => void;
+  onEdit: (task: Task) => void;
+  onDelete: (taskId: string) => void;
+  onStatusChange: (taskId: string, status: Status) => void;
+}
+
+const TaskCard = memo(function TaskCard({ 
+  task, 
+  index, 
+  isLeader, 
+  theme, 
+  authUser, 
+  activeProject,
+  onToggle,
+  onEdit,
+  onDelete,
+  onStatusChange
+}: TaskCardProps) {
+  const memberCanUpdate = authUser.role !== 'member' || isAssigned(task, authUser.id);
+  const borderClass = getTaskBorderClass(task);
+  const isDragDisabled = !isLeader;
+
+  return (
+    <Draggable key={task.id} draggableId={task.id} index={index} isDragDisabled={isDragDisabled}>
+      {(dragProvided, dragSnapshot) => (
+        <article
+          ref={dragProvided.innerRef}
+          {...dragProvided.draggableProps}
+          {...dragProvided.dragHandleProps}
+          className={cn(
+            'rounded-2xl p-4',
+            borderClass,
+            getTaskBgClass(task),
+            dragSnapshot.isDragging 
+              ? 'shadow-2xl ring-2 ring-blue-500/30 z-50' 
+              : ''
+          )}
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              {isLeader && (
+                <input
+                  type="checkbox"
+                  checked={task.completed}
+                  onChange={(e) => onToggle(task.id, e.target.checked)}
+                  className="mt-1 h-5 w-5 cursor-pointer accent-green-500"
+                />
+              )}
+              <div>
+                <p className={cn('font-semibold', task.completed && 'line-through', theme === 'dark' ? 'text-slate-200' : 'text-slate-800')}>{task.title}</p>
+                <p className={cn('mt-1 text-sm', theme === 'dark' ? 'text-slate-400' : 'text-slate-500')}>{task.description || 'No description'}</p>
+              </div>
+            </div>
+            <span className="rounded-full px-2.5 py-1 text-xs font-semibold uppercase bg-slate-500/10 text-slate-500">{task.priority}</span>
+          </div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {task.assignees.map((assignee) => <span key={assignee.id} className={cn('inline-flex items-center gap-2 rounded-full bg-slate-500/10 px-3 py-1 text-xs font-medium', theme === 'dark' ? 'text-slate-300' : 'text-slate-600')}><span className={cn('flex h-5 w-5 items-center justify-center rounded-full text-[10px] text-white', assignee.color)}>{assignee.avatar}</span>{assignee.name}</span>)}
+            {task.assignees.length === 0 && <span className={cn('text-xs', theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}>Unassigned</span>}
+          </div>
+          <div className={cn('flex items-center justify-between gap-3 text-xs', theme === 'dark' ? 'text-slate-400' : 'text-slate-500')}>
+            <span className={cn(
+              isOverdue(task) ? 'text-red-500 font-medium' : ''
+            )}>Due: {task.dueDate || 'No due date'}</span>
+            <span className={theme === 'dark' ? 'text-slate-500' : ''}>{task.createdAt ? new Date(task.createdAt).toLocaleDateString() : '-'}</span>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <select 
+              className={cn('rounded-lg border px-3 py-2 text-sm outline-none transition-colors', theme === 'dark' ? 'border-slate-700 bg-slate-800 text-slate-200' : 'border-slate-300 bg-transparent', !memberCanUpdate && 'opacity-50 cursor-not-allowed')} 
+              disabled={!memberCanUpdate} 
+              value={task.status} 
+              onChange={(e) => onStatusChange(task.id, e.target.value as Status)}
+            >
+              {STATUS_COLUMNS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+            {authUser.role !== 'member' && (
+              <>
+                <button className={cn('rounded-lg px-3 py-2 text-sm font-medium transition-colors', theme === 'dark' ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-900 text-white hover:bg-slate-800')} onClick={() => onEdit(task)} type="button">Edit</button>
+                <button className={cn('rounded-lg border px-3 py-2 text-sm font-medium transition-colors', theme === 'dark' ? 'border-rose-900/50 text-rose-400 hover:bg-rose-950/50' : 'border-rose-200 text-rose-600 hover:bg-rose-50')} onClick={() => onDelete(task.id)} type="button">Delete</button>
+              </>
+            )}
+          </div>
+        </article>
+      )}
+    </Draggable>
+  );
+});
 
 export default function TeamTaskApp() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem(THEME_KEY) as ThemeMode) || 'light');
@@ -279,14 +373,19 @@ export default function TeamTaskApp() {
     }
   };
 
-  const changeTaskStatus = async (taskId: string, status: Status) => {
+  const changeTaskStatus = useCallback(async (taskId: string, status: Status) => {
+    setTasks((current) => current.map((task) => 
+      task.id === taskId ? { ...task, status } : task
+    ));
+    
     try {
-      const updatedTask = await taskService.updateStatus(taskId, status);
-      setTasks((current) => current.map((task) => (task.id === taskId ? updatedTask : task)));
+      await taskService.updateStatus(taskId, status);
     } catch (taskError: any) {
+      const tasksData = await taskService.getAll(activeProjectId);
+      setTasks(tasksData);
       setError(taskError.response?.data?.error || 'Failed to update status');
     }
-  };
+  }, [activeProjectId]);
 
   const toggleTaskComplete = async (taskId: string, completed: boolean) => {
     try {
@@ -297,23 +396,32 @@ export default function TeamTaskApp() {
     }
   };
 
-  const handleDragEnd = (result: DropResult) => {
+  const handleDragEnd = useCallback((result: DropResult) => {
     const { draggableId, destination } = result;
     if (!destination) return;
     if (!canManage(authUser, activeProject)) return;
     if (destination.droppableId === result.source.droppableId) return;
 
     const newStatus = destination.droppableId as Status;
-    taskService.updateStatus(draggableId, newStatus)
+    const taskId = draggableId;
+    
+    setTasks((current) => {
+      const taskIndex = current.findIndex(t => t.id === taskId);
+      if (taskIndex === -1) return current;
+      const updatedTasks = [...current];
+      updatedTasks[taskIndex] = { ...updatedTasks[taskIndex], status: newStatus };
+      return updatedTasks;
+    });
+
+    taskService.updateStatus(taskId, newStatus)
       .then((updatedTask) => {
-        requestAnimationFrame(() => {
-          setTasks((current) => current.map((task) => (task.id === draggableId ? updatedTask : task)));
-        });
+        setTasks((current) => current.map((task) => (task.id === taskId ? updatedTask : task)));
       })
       .catch((taskError: any) => {
+        setTasks((current) => taskService.getAll(activeProjectId).then(setTasks));
         setError(taskError.response?.data?.error || 'Failed to update status');
       });
-  };
+  }, [authUser, activeProject, activeProjectId]);
 
   if (loading && !authUser) return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">Loading TeamTask...</div>;
 
@@ -431,71 +539,34 @@ export default function TeamTaskApp() {
                     <section
                       ref={provided.innerRef}
                       {...provided.droppableProps}
-                      className={cn('min-h-[480px] rounded-3xl border p-4 transition-colors', snapshot.isDraggingOver ? 'border-blue-400 bg-blue-500/5' : '', theme === 'dark' ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-white')}
+                      className={cn(
+                        'min-h-[480px] rounded-3xl border p-4',
+                        snapshot.isDraggingOver 
+                          ? 'border-blue-400 bg-blue-500/10' 
+                          : '',
+                        theme === 'dark' ? 'border-slate-800 bg-slate-900' : 'border-slate-200 bg-white'
+                      )}
                     >
                       <div className="mb-4">
                         <h3 className={cn('font-semibold', theme === 'dark' ? 'text-slate-200' : 'text-slate-800')}>{column.label}</h3>
                         <p className={cn('text-sm', theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}>{tasksByColumn[column.id].length} tasks</p>
                       </div>
                       <div className="space-y-4">
-                        {tasksByColumn[column.id].map((task, index) => {
-                          const memberCanUpdate = authUser.role !== 'member' || isAssigned(task, authUser.id);
-                          const borderClass = getTaskBorderClass(task);
-                          const opacityClass = getTaskOpacity(task);
-                          const isLeader = authUser.role !== 'member';
-
-                          return (
-                            <Draggable key={task.id} draggableId={task.id} index={index} isDragDisabled={!isLeader}>
-                              {(dragProvided, dragSnapshot) => (
-                                <article
-                                  ref={dragProvided.innerRef}
-                                  {...dragProvided.draggableProps}
-                                  {...dragProvided.dragHandleProps}
-                                  className={cn('rounded-2xl p-4 transition-all', borderClass, getTaskBgClass(task), opacityClass, dragSnapshot.isDragging ? 'shadow-xl scale-105 rotate-1' : '')}
-                                >
-                                  <div className="mb-3 flex items-start justify-between gap-3">
-                                    <div className="flex items-start gap-3">
-                                      {isLeader && (
-                                        <input
-                                          type="checkbox"
-                                          checked={task.completed}
-                                          onChange={(e) => toggleTaskComplete(task.id, e.target.checked)}
-                                          className="mt-1 h-5 w-5 cursor-pointer accent-green-500"
-                                        />
-                                      )}
-                                      <div>
-                                        <p className={cn('font-semibold', task.completed && 'line-through', theme === 'dark' ? 'text-slate-200' : 'text-slate-800')}>{task.title}</p>
-                                        <p className={cn('mt-1 text-sm', theme === 'dark' ? 'text-slate-400' : 'text-slate-500')}>{task.description || 'No description'}</p>
-                                      </div>
-                                    </div>
-                                    <span className="rounded-full px-2.5 py-1 text-xs font-semibold uppercase bg-slate-500/10 text-slate-500">{task.priority}</span>
-                                  </div>
-                                  <div className="mb-3 flex flex-wrap gap-2">
-                                    {task.assignees.map((assignee) => <span key={assignee.id} className={cn('inline-flex items-center gap-2 rounded-full bg-slate-500/10 px-3 py-1 text-xs font-medium', theme === 'dark' ? 'text-slate-300' : 'text-slate-600')}><span className={cn('flex h-5 w-5 items-center justify-center rounded-full text-[10px] text-white', assignee.color)}>{assignee.avatar}</span>{assignee.name}</span>)}
-                                    {task.assignees.length === 0 && <span className={cn('text-xs', theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}>Unassigned</span>}
-                                  </div>
-                                  <div className={cn('flex items-center justify-between gap-3 text-xs', theme === 'dark' ? 'text-slate-400' : 'text-slate-500')}>
-                                    <span className={cn(
-                                      isOverdue(task) ? 'text-red-500 font-medium' : ''
-                                    )}>Due: {task.dueDate || 'No due date'}</span>
-                                    <span className={theme === 'dark' ? 'text-slate-500' : ''}>{task.createdAt ? new Date(task.createdAt).toLocaleDateString() : '-'}</span>
-                                  </div>
-                                  <div className="mt-4 flex flex-wrap items-center gap-2">
-                                    <select className={cn('rounded-lg border px-3 py-2 text-sm outline-none transition-colors', theme === 'dark' ? 'border-slate-700 bg-slate-800 text-slate-200' : 'border-slate-300 bg-transparent', !memberCanUpdate && 'opacity-50 cursor-not-allowed')} disabled={!memberCanUpdate} value={task.status} onChange={(event) => changeTaskStatus(task.id, event.target.value as Status)}>
-                                      {STATUS_COLUMNS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                                    </select>
-                                    {authUser.role !== 'member' && (
-                                      <>
-                                        <button className={cn('rounded-lg px-3 py-2 text-sm font-medium transition-colors', theme === 'dark' ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-900 text-white hover:bg-slate-800')} onClick={() => openEditTask(task)} type="button">Edit</button>
-                                        <button className={cn('rounded-lg border px-3 py-2 text-sm font-medium transition-colors', theme === 'dark' ? 'border-rose-900/50 text-rose-400 hover:bg-rose-950/50' : 'border-rose-200 text-rose-600 hover:bg-rose-50')} onClick={() => removeTask(task.id)} type="button">Delete</button>
-                                      </>
-                                    )}
-                                  </div>
-                                </article>
-                              )}
-                            </Draggable>
-                          );
-                        })}
+                        {tasksByColumn[column.id].map((task, index) => (
+                          <TaskCard
+                            key={task.id}
+                            task={task}
+                            index={index}
+                            isLeader={authUser.role !== 'member'}
+                            theme={theme}
+                            authUser={authUser}
+                            activeProject={activeProject}
+                            onToggle={toggleTaskComplete}
+                            onEdit={openEditTask}
+                            onDelete={removeTask}
+                            onStatusChange={changeTaskStatus}
+                          />
+                        ))}
                         {provided.placeholder}
                       </div>
                     </section>

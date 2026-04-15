@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { 
   Sun,
   Moon,
@@ -127,6 +127,134 @@ const isOverdue = (task: Task) => {
   if (!task.deadline || task.status === 'done') return false;
   return new Date(task.deadline) < new Date();
 };
+
+interface TaskCardAppProps {
+  task: Task;
+  index: number;
+  theme: 'light' | 'dark';
+  members: Member[];
+  onEdit: (task: Task) => void;
+  onDelete: (id: string) => void;
+  isDeleting: string | null;
+}
+
+const TaskCardApp = memo(function TaskCardApp({ task, index, theme, members, onEdit, onDelete, isDeleting }: TaskCardAppProps) {
+  return (
+    <DraggableAny key={task.id} draggableId={task.id} index={index}>
+      {(provided: any, snapshot: any) => (
+        <div
+          ref={provided.innerRef}
+          {...provided.draggableProps}
+          className={cn(
+            "border-2 rounded-xl p-4 shadow-sm group relative",
+            task.completed 
+              ? (theme === 'dark' ? "bg-emerald-950/50 border-emerald-600/50" : "bg-emerald-50 border-emerald-300")
+              : isOverdue(task)
+                ? (theme === 'dark' ? "bg-red-950/50 border-red-600/50" : "bg-red-50 border-red-300")
+                : task.status === 'done'
+                  ? (theme === 'dark' ? "bg-slate-800/50 border-slate-600/30" : "bg-slate-100 border-slate-200")
+                  : (theme === 'dark' ? "bg-slate-900 border-slate-800" : "bg-white border-slate-200"),
+            snapshot.isDragging ? "shadow-xl ring-2 ring-blue-500/20 rotate-1 z-50" : ""
+          )}
+        >
+          <div className="flex items-start justify-between mb-2">
+            <div className={cn(
+              "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter",
+              theme === 'dark' ? "bg-slate-800 text-slate-400" : "bg-slate-50 text-slate-500"
+            )}>
+              {task.priority}
+            </div>
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button 
+                onClick={() => onEdit(task)}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  theme === 'dark' ? "hover:bg-slate-800 text-slate-500 hover:text-blue-400" : "hover:bg-slate-100 text-slate-400 hover:text-blue-600"
+                )}
+              >
+                <Edit3 size={14} />
+              </button>
+              <button 
+                onClick={() => onDelete(task.id)}
+                disabled={isDeleting === task.id}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  isDeleting === task.id ? "opacity-50 cursor-not-allowed" : "",
+                  theme === 'dark' ? "hover:bg-slate-800 text-slate-500 hover:text-red-400" : "hover:bg-slate-100 text-slate-400 hover:text-red-500"
+                )}
+              >
+                {isDeleting === task.id ? (
+                  <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Trash2 size={14} />
+                )}
+              </button>
+              <div {...provided.dragHandleProps} className="p-1 cursor-grab active:cursor-grabbing text-slate-600">
+                <GripVertical size={14} />
+              </div>
+            </div>
+          </div>
+          
+          <h4 className={cn(
+            "font-semibold mb-1 leading-tight",
+            theme === 'dark' ? "text-slate-100" : "text-slate-800"
+          )}>{task.title}</h4>
+          <p className={cn(
+            "text-sm line-clamp-2 mb-3 leading-relaxed",
+            theme === 'dark' ? "text-slate-400" : "text-slate-500"
+          )}>
+            {task.description}
+          </p>
+
+          {task.deadline && (
+            <div className={cn(
+              "flex items-center gap-1.5 mb-3 px-2 py-1 rounded text-[10px] font-medium",
+              isOverdue(task) 
+                ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" 
+                : theme === 'dark' 
+                  ? "bg-slate-800 text-slate-500" 
+                  : "bg-slate-50 text-slate-400"
+            )}>
+              <Calendar size={12} />
+              <span>
+                {isOverdue(task) ? "Overdue: " : "Due: "}
+                {new Date(task.deadline).toLocaleDateString()}
+              </span>
+            </div>
+          )}
+
+          <div className={cn(
+            "flex items-center justify-between pt-3 border-t",
+            theme === 'dark' ? "border-slate-800" : "border-slate-50"
+          )}>
+            <div className={cn(
+              "flex items-center gap-1.5",
+              theme === 'dark' ? "text-slate-500" : "text-slate-400"
+            )}>
+              <Clock size={12} />
+              <span className="text-[10px] font-medium">
+                {new Date(task.createdAt).toLocaleDateString()}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {task.assigneeId && (
+                <div 
+                  title={members.find(m => m.id === task.assigneeId)?.name}
+                  className={cn(
+                    "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm",
+                    members.find(m => m.id === task.assigneeId)?.color || "bg-slate-400"
+                  )}
+                >
+                  {members.find(m => m.id === task.assigneeId)?.avatar}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </DraggableAny>
+  );
+});
 
 export default function App() {
   // --- State ---
@@ -275,7 +403,7 @@ export default function App() {
   }, [tasks]);
 
   // --- Handlers ---
-  const onDragEnd = async (result: DropResult) => {
+  const onDragEnd = useCallback((result: DropResult) => {
     const { destination, source, draggableId } = result;
 
     if (!destination) return;
@@ -284,19 +412,16 @@ export default function App() {
     const newStatus = destination.droppableId as Status;
     const taskId = draggableId;
 
-    try {
-      await taskService.updateStatus(taskId, newStatus);
-      requestAnimationFrame(() => {
-        setTasks(prevTasks => prevTasks.map(t => 
-          t.id === taskId ? { ...t, status: newStatus } : t
-        ));
-      });
-    } catch (err) {
+    setTasks(prevTasks => prevTasks.map(t => 
+      t.id === taskId ? { ...t, status: newStatus } : t
+    ));
+
+    taskService.updateStatus(taskId, newStatus).catch(async (err) => {
       console.error('Failed to update task status:', err);
       const tasksData = await taskService.getAll(activeProjectId);
       setTasks(tasksData);
-    }
-  };
+    });
+  }, [activeProjectId]);
 
   const handleAddProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -355,7 +480,7 @@ export default function App() {
     }
   };
 
-  const handleSaveTask = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveTask = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     const title = formData.get('title') as string;
@@ -428,9 +553,9 @@ export default function App() {
 
     setIsTaskModalOpen(false);
     setEditingTask(null);
-  };
+  }, [editingTask, activeProjectId, tasks]);
 
-  const deleteTask = async (id: string) => {
+  const deleteTask = useCallback(async (id: string) => {
     setIsDeleting(id);
     setError(null);
     const previousTasks = tasks;
@@ -446,7 +571,7 @@ export default function App() {
     } finally {
       setIsDeleting(null);
     }
-  };
+  }, [tasks]);
 
   return (
     <div className={cn(
@@ -713,131 +838,26 @@ export default function App() {
                         {...provided.droppableProps}
                         ref={provided.innerRef}
                         className={cn(
-                          "flex-1 rounded-lg transition-colors p-1 overflow-y-auto",
+                          "flex-1 rounded-lg p-1 overflow-y-auto",
                           snapshot.isDraggingOver 
                             ? (theme === 'dark' ? "bg-slate-900/50" : "bg-slate-50") 
                             : "bg-transparent"
                         )}
+                        style={{}}
                       >
                         <div className="space-y-3">
                           {(filteredTasksByColumn[column.id] || [])
                             .map((task, index) => (
-                              <DraggableAny key={task.id} draggableId={task.id} index={index}>
-                                {(provided: any, snapshot: any) => (
-                                  <div
-                                    ref={provided.innerRef}
-                                    {...provided.draggableProps}
-                                    className={cn(
-                                      "border-2 rounded-xl p-4 shadow-sm hover:shadow-md transition-all group relative",
-                                      task.completed 
-                                        ? (theme === 'dark' ? "bg-emerald-950/50 border-emerald-600/50" : "bg-emerald-50 border-emerald-300")
-                                        : isOverdue(task)
-                                          ? (theme === 'dark' ? "bg-red-950/50 border-red-600/50" : "bg-red-50 border-red-300")
-                                          : task.status === 'done'
-                                            ? (theme === 'dark' ? "bg-slate-800/50 border-slate-600/30" : "bg-slate-100 border-slate-200")
-                                            : (theme === 'dark' ? "bg-slate-900 border-slate-800 hover:border-slate-700" : "bg-white border-slate-200 hover:border-slate-300"),
-                                      snapshot.isDragging ? "shadow-xl ring-2 ring-blue-500/20 rotate-1 z-50" : ""
-                                    )}
-                                  >
-                                    <div className="flex items-start justify-between mb-2">
-                                      <div className={cn(
-                                        "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-tighter",
-                                        theme === 'dark' ? "bg-slate-800 text-slate-400" : "bg-slate-50 text-slate-500"
-                                      )}>
-                                        {task.priority}
-                                      </div>
-                                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button 
-                                          onClick={() => {
-                                            setEditingTask(task);
-                                            setIsTaskModalOpen(true);
-                                          }}
-                                          className={cn(
-                                            "p-1 rounded transition-colors",
-                                            theme === 'dark' ? "hover:bg-slate-800 text-slate-500 hover:text-blue-400" : "hover:bg-slate-100 text-slate-400 hover:text-blue-600"
-                                          )}
-                                        >
-                                          <Edit3 size={14} />
-                                        </button>
-                                        <button 
-                                          onClick={() => deleteTask(task.id)}
-                                          disabled={isDeleting === task.id}
-                                          className={cn(
-                                            "p-1 rounded transition-colors",
-                                            isDeleting === task.id ? "opacity-50 cursor-not-allowed" : "",
-                                            theme === 'dark' ? "hover:bg-slate-800 text-slate-500 hover:text-red-400" : "hover:bg-slate-100 text-slate-400 hover:text-red-500"
-                                          )}
-                                        >
-                                          {isDeleting === task.id ? (
-                                            <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                                          ) : (
-                                            <Trash2 size={14} />
-                                          )}
-                                        </button>
-                                        <div {...provided.dragHandleProps} className="p-1 cursor-grab active:cursor-grabbing text-slate-600">
-                                          <GripVertical size={14} />
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    <h4 className={cn(
-                                      "font-semibold mb-1 leading-tight transition-colors",
-                                      theme === 'dark' ? "text-slate-100" : "text-slate-800"
-                                    )}>{task.title}</h4>
-                                    <p className={cn(
-                                      "text-sm line-clamp-2 mb-3 leading-relaxed transition-colors",
-                                      theme === 'dark' ? "text-slate-400" : "text-slate-500"
-                                    )}>
-                                      {task.description}
-                                    </p>
-
-                                    {task.deadline && (
-                                      <div className={cn(
-                                        "flex items-center gap-1.5 mb-3 px-2 py-1 rounded text-[10px] font-medium transition-colors",
-                                        isOverdue(task) 
-                                          ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400" 
-                                          : theme === 'dark' 
-                                            ? "bg-slate-800 text-slate-500" 
-                                            : "bg-slate-50 text-slate-400"
-                                      )}>
-                                        <Calendar size={12} />
-                                        <span>
-                                          {isOverdue(task) ? "Overdue: " : "Due: "}
-                                          {new Date(task.deadline).toLocaleDateString()}
-                                        </span>
-                                      </div>
-                                    )}
-
-                                    <div className={cn(
-                                      "flex items-center justify-between pt-3 border-t transition-colors",
-                                      theme === 'dark' ? "border-slate-800" : "border-slate-50"
-                                    )}>
-                                      <div className={cn(
-                                        "flex items-center gap-1.5 transition-colors",
-                                        theme === 'dark' ? "text-slate-500" : "text-slate-400"
-                                      )}>
-                                        <Clock size={12} />
-                                        <span className="text-[10px] font-medium">
-                                          {new Date(task.createdAt).toLocaleDateString()}
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center gap-2">
-                                        {task.assigneeId && (
-                                          <div 
-                                            title={members.find(m => m.id === task.assigneeId)?.name}
-                                            className={cn(
-                                              "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shadow-sm",
-                                              members.find(m => m.id === task.assigneeId)?.color || "bg-slate-400"
-                                            )}
-                                          >
-                                            {members.find(m => m.id === task.assigneeId)?.avatar}
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </DraggableAny>
+                              <TaskCardApp
+                                key={task.id}
+                                task={task}
+                                index={index}
+                                theme={theme}
+                                members={members}
+                                onEdit={(t) => { setEditingTask(t); setIsTaskModalOpen(true); }}
+                                onDelete={deleteTask}
+                                isDeleting={isDeleting}
+                              />
                             ))}
                           {provided.placeholder}
                         </div>
