@@ -49,7 +49,13 @@ export const taskService = {
     return response.data;
   },
 
+  reorder: async (id: string, status: Status, position: number): Promise<Task> => {
+    const response = await api.patch<Task>(`/tasks/${id}/reorder`, { status, position });
+    return response.data;
+  },
+
   delete: async (id: string): Promise<void> => {
+
     await api.delete(`/tasks/${id}`);
   },
 };

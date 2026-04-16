@@ -69,10 +69,57 @@ const remove = async (req, res) => {
   }
 };
 
+const getMembers = async (req, res) => {
+  try {
+    const members = await projectService.getMembers(req.params.id);
+    res.json(members);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const addMember = async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+    await projectService.addMember(req.params.id, userId, role);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const removeMember = async (req, res) => {
+  try {
+    const deleted = await projectService.removeMember(req.params.id, req.params.userId);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Member not found in project' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getStats = async (req, res) => {
+  try {
+    const stats = await projectService.getStats(req.params.id);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   getAll,
   getById,
   create,
   update,
   remove,
+  getMembers,
+  addMember,
+  removeMember,
+  getStats,
 };

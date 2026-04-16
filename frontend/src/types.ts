@@ -42,6 +42,7 @@ export interface Project {
   updatedAt?: number | null;
   permissions: PermissionSet;
   columns?: BoardColumn[];
+  memberCount?: number;
 }
 
 export interface Task {

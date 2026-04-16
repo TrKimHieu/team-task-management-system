@@ -13,6 +13,7 @@ router.get('/:id', taskController.getById);
 router.post('/', requireRole(ROLES.LEADER, ROLES.ADMIN), taskController.create);
 router.put('/:id', requireRole(ROLES.LEADER, ROLES.ADMIN), taskController.update);
 router.patch('/:id/status', requireTaskAssignmentOrElevatedRole(taskService), taskController.updateStatus);
+router.patch('/:id/reorder', requireTaskAssignmentOrElevatedRole(taskService), taskController.reorder);
 router.delete('/:id', requireRole(ROLES.LEADER, ROLES.ADMIN), taskController.remove);
 
 module.exports = router;

@@ -179,6 +179,10 @@ const update = async (id, changes) => {
       fields.push(`completed = $${index++}`);
       values.push(changes.completed);
     }
+    if (changes.position !== undefined) {
+      fields.push(`position = $${index++}`);
+      values.push(changes.position);
+    }
 
     if (fields.length > 0) {
       fields.push('updated_at = CURRENT_TIMESTAMP');
@@ -207,9 +211,81 @@ const update = async (id, changes) => {
 
 const updateStatus = async (id, status) => update(id, { status });
 
+const reorder = async (id, { status, position }) => {
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    
+    const task = await getById(id);
+    if (!task) throw new Error('Task not found');
+
+    const oldStatus = task.status;
+    const oldPosition = task.position;
+
+    if (oldStatus === status) {
+      // Reordering within the same column
+      if (oldPosition < position) {
+        await client.query(
+          'UPDATE tasks SET position = position - 1 WHERE project_id = $1 AND status = $2 AND position > $3 AND position <= $4',
+          [task.projectId, status, oldPosition, position]
+        );
+      } else if (oldPosition > position) {
+        await client.query(
+          'UPDATE tasks SET position = position + 1 WHERE project_id = $1 AND status = $2 AND position >= $3 AND position < $4',
+          [task.projectId, status, position, oldPosition]
+        );
+      }
+    } else {
+      // Moving to a different column
+      // 1. Shift positions in old column down
+      await client.query(
+        'UPDATE tasks SET position = position - 1 WHERE project_id = $1 AND status = $2 AND position > $3',
+        [task.projectId, oldStatus, oldPosition]
+      );
+      // 2. Shift positions in new column up
+      await client.query(
+        'UPDATE tasks SET position = position + 1 WHERE project_id = $1 AND status = $2 AND position >= $3',
+        [task.projectId, status, position]
+      );
+    }
+
+    // 3. Update the task itself
+    await client.query(
+      'UPDATE tasks SET status = $1, position = $2, board_column_id = (SELECT bc.id FROM board_columns bc JOIN boards b ON bc.board_id = b.id WHERE b.project_id = $3 AND bc.key = $4 LIMIT 1) WHERE id = $5',
+      [status, position, task.projectId, status, id]
+    );
+
+    await client.query('COMMIT');
+    return getById(id);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const remove = async (id) => {
-  const result = await db.query('DELETE FROM tasks WHERE id = $1 RETURNING id', [id]);
-  return Boolean(result.rows[0]);
+  const task = await getById(id);
+  if (!task) return false;
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM tasks WHERE id = $1', [id]);
+    // Shift positions up
+    await client.query(
+      'UPDATE tasks SET position = position - 1 WHERE project_id = $1 AND status = $2 AND position > $3',
+      [task.projectId, task.status, task.position]
+    );
+    await client.query('COMMIT');
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 const isUserAssigned = async (taskId, userId) => {
@@ -219,7 +295,6 @@ const isUserAssigned = async (taskId, userId) => {
      WHERE task_id = $1 AND user_id = $2`,
     [taskId, userId]
   );
-
   return Boolean(result.rows[0]);
 };
 
@@ -229,6 +304,7 @@ module.exports = {
   create,
   update,
   updateStatus,
+  reorder,
   remove,
   isUserAssigned,
 };

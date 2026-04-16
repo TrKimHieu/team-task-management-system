@@ -108,6 +108,23 @@ const updateStatus = async (req, res) => {
   }
 };
 
+const reorder = async (req, res) => {
+  try {
+    const { status, position } = req.body;
+    if (!status || position === undefined) {
+      return res.status(400).json({ error: 'status and position are required' });
+    }
+    if (!validateStatus(status, res)) {
+      return;
+    }
+
+    const task = await taskService.reorder(req.params.id, { status, position });
+    res.json(task);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 const remove = async (req, res) => {
   try {
     const deleted = await taskService.remove(req.params.id);
@@ -127,5 +144,6 @@ module.exports = {
   create,
   update,
   updateStatus,
+  reorder,
   remove,
 };

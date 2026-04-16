@@ -23,6 +23,7 @@ const normalizeProject = (row, role) => ({
   createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
   updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
   permissions: buildPermissions(role),
+  memberCount: row.member_count ? parseInt(row.member_count) : 0,
 });
 
 const getColumnsByProjectId = async (projectId) => {
@@ -44,12 +45,20 @@ const getColumnsByProjectId = async (projectId) => {
 };
 
 const getAll = async (authUser) => {
-  const result = await db.query('SELECT * FROM projects ORDER BY created_at DESC');
+  const result = await db.query(`
+    SELECT p.*, (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) as member_count
+    FROM projects p 
+    ORDER BY p.created_at DESC
+  `);
   return result.rows.map((row) => normalizeProject(row, authUser.role));
 };
 
 const getById = async (id, authUser) => {
-  const result = await db.query('SELECT * FROM projects WHERE id = $1', [id]);
+  const result = await db.query(`
+    SELECT p.*, (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) as member_count
+    FROM projects p 
+    WHERE p.id = $1
+  `, [id]);
   const project = result.rows[0];
   if (!project) {
     return null;
@@ -147,6 +156,62 @@ const remove = async (id) => {
   return Boolean(result.rows[0]);
 };
 
+const getMembers = async (projectId) => {
+  const result = await db.query(
+    `SELECT u.id, u.name, u.email, u.avatar, u.color, pm.project_role
+     FROM users u
+     JOIN project_members pm ON pm.user_id = u.id
+     WHERE pm.project_id = $1
+     ORDER BY u.name ASC`,
+    [projectId]
+  );
+  return result.rows;
+};
+
+const addMember = async (projectId, userId, role = ROLES.MEMBER) => {
+  await db.query(
+    `INSERT INTO project_members (project_id, user_id, project_role)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (project_id, user_id) DO UPDATE SET project_role = $3`,
+    [projectId, userId, role]
+  );
+  return true;
+};
+
+const removeMember = async (projectId, userId) => {
+  const result = await db.query(
+    'DELETE FROM project_members WHERE project_id = $1 AND user_id = $2 RETURNING user_id',
+    [projectId, userId]
+  );
+  return Boolean(result.rows[0]);
+};
+
+const getStats = async (projectId) => {
+  const result = await db.query(
+    `SELECT 
+       COUNT(*) as total_tasks,
+       SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END) as todo_count,
+       SUM(CASE WHEN status = 'in-progress' THEN 1 ELSE 0 END) as in_progress_count,
+       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done_count,
+       SUM(CASE WHEN priority = 'high' THEN 1 ELSE 0 END) as high_priority_count,
+       SUM(CASE WHEN completed = true THEN 1 ELSE 0 END) as completed_count
+     FROM tasks
+     WHERE project_id = $1`,
+    [projectId]
+  );
+  
+  const stats = result.rows[0];
+  return {
+    totalTasks: parseInt(stats.total_tasks || 0),
+    todoTasks: parseInt(stats.todo_count || 0),
+    inProgressTasks: parseInt(stats.in_progress_count || 0),
+    doneTasks: parseInt(stats.done_count || 0),
+    highPriorityTasks: parseInt(stats.high_priority_count || 0),
+    completedTasks: parseInt(stats.completed_count || 0),
+    completionRate: stats.total_tasks > 0 ? (stats.completed_count / stats.total_tasks) * 100 : 0
+  };
+};
+
 module.exports = {
   getAll,
   getById,
@@ -155,4 +220,8 @@ module.exports = {
   remove,
   getColumnsByProjectId,
   buildPermissions,
+  getMembers,
+  addMember,
+  removeMember,
+  getStats,
 };
