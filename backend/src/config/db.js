@@ -1,4 +1,6 @@
 const { Pool } = require("pg");
+const fs = require('fs');
+const path = require('path');
 require("dotenv").config();
 
 const pool = new Pool({
@@ -16,18 +18,28 @@ pool.on('error', (err) => {
 });
 
 const runMigrations = async () => {
-  const migrations = [
-    { name: 'add_completed_column', sql: 'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE;' }
+  const candidateDirs = [
+    path.join(__dirname, '../../migrations'),
+    path.join(__dirname, '../../../database/migrations'),
+  ];
+  const migrationsDir = candidateDirs.find((dir) => fs.existsSync(dir));
+  if (!migrationsDir) {
+    throw new Error('Migration directory not found');
+  }
+
+  const migrationFiles = [
+    '001_add_completed_column.sql',
+    '002_add_features.sql',
+    '004_create_task_activities.sql',
   ];
 
-  for (const migration of migrations) {
+  for (const fileName of migrationFiles) {
     try {
-      await pool.query(migration.sql);
-      console.log(`Migration "${migration.name}" completed`);
+      const sql = fs.readFileSync(path.join(migrationsDir, fileName), 'utf8');
+      await pool.query(sql);
+      console.log(`Migration "${fileName}" completed`);
     } catch (err) {
-      if (err.code !== '42701') {
-        console.error(`Migration "${migration.name}" failed:`, err.message);
-      }
+      console.error(`Migration "${fileName}" failed:`, err.message);
     }
   }
 };

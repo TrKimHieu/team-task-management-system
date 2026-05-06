@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { KanbanColumn } from './KanbanColumn';
 import { Task, Status, ThemeMode, AuthUser } from '../../types';
@@ -12,6 +12,8 @@ interface KanbanBoardProps {
   onEditTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
   onToggleComplete: (taskId: string, completed: boolean) => void;
+  isDragDisabled?: boolean;
+  onTaskUpdate?: (task: Task) => void;
 }
 
 const COLUMNS: { id: Status; label: string }[] = [
@@ -28,11 +30,13 @@ export const KanbanBoard = ({
   onAddTask,
   onEditTask,
   onDeleteTask,
-  onToggleComplete
+  onToggleComplete,
+  isDragDisabled = false,
+  onTaskUpdate
 }: KanbanBoardProps) => {
   const tasksByColumn = useMemo(() => {
     const grouped: Record<Status, Task[]> = { todo: [], 'in-progress': [], done: [] };
-    tasks
+    [...tasks]
       .sort((a, b) => (a.position || 0) - (b.position || 0))
       .forEach((task) => {
         if (grouped[task.status]) {
@@ -50,8 +54,7 @@ export const KanbanBoard = ({
             {COLUMNS.map((column) => (
               <KanbanColumn
                 key={column.id}
-                id={column.id}
-                title={column.label}
+                column={column}
                 tasks={tasksByColumn[column.id]}
                 theme={theme}
                 authUser={authUser}
@@ -59,6 +62,8 @@ export const KanbanBoard = ({
                 onEditTask={onEditTask}
                 onDeleteTask={onDeleteTask}
                 onToggleComplete={onToggleComplete}
+                isDragDisabled={isDragDisabled}
+                onTaskUpdate={onTaskUpdate}
               />
             ))}
           </div>

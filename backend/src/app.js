@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 require("dotenv").config();
 const { pool, connectWithRetry } = require("./config/db");
@@ -6,6 +7,11 @@ const taskRoutes = require("./routes/task.routes");
 const projectRoutes = require("./routes/project.routes");
 const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
+const commentRoutes = require("./routes/comment.routes");
+const attachmentRoutes = require("./routes/attachment.routes");
+const notificationRoutes = require("./routes/notification.routes");
+const labelRoutes = require("./routes/label.routes");
+const activityRoutes = require("./routes/activity.routes");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./docs/swagger");
 
@@ -25,6 +31,12 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/tasks", taskRoutes);
 app.use("/api/projects", projectRoutes);
+app.use("/api/comments", commentRoutes);
+app.use("/api/attachments", attachmentRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/labels", labelRoutes);
+app.use("/api/activities", activityRoutes);
+app.use("/uploads", express.static(path.join(__dirname, '../../uploads')));
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.get("/", (req, res) => {

@@ -3,18 +3,79 @@ import { DropResult } from '@hello-pangea/dnd';
 import { Task, Status } from '../types';
 import { taskService } from '../services/taskService';
 
+const BOARD_STATUSES: Status[] = ['todo', 'in-progress', 'done'];
+
+const sortTasksByPosition = (items: Task[]) =>
+  [...items].sort((left, right) => (left.position || 0) - (right.position || 0));
+
+const reorderTasks = (tasks: Task[], result: DropResult) => {
+  const { source, destination, draggableId } = result;
+  if (!destination) {
+    return tasks;
+  }
+
+  const grouped = BOARD_STATUSES.reduce<Record<Status, Task[]>>(
+    (accumulator, status) => {
+      accumulator[status] = sortTasksByPosition(
+        tasks
+          .filter((task) => task.status === status)
+          .map((task) => ({ ...task }))
+      );
+      return accumulator;
+    },
+    { todo: [], 'in-progress': [], done: [] }
+  );
+
+  const sourceStatus = source.droppableId as Status;
+  const destinationStatus = destination.droppableId as Status;
+  const sourceTasks = grouped[sourceStatus];
+  const destinationTasks = sourceStatus === destinationStatus ? sourceTasks : grouped[destinationStatus];
+
+  const sourceIndex = sourceTasks.findIndex((task) => task.id === draggableId);
+  if (sourceIndex === -1) {
+    return tasks;
+  }
+
+  const [movedTask] = sourceTasks.splice(sourceIndex, 1);
+  movedTask.status = destinationStatus;
+  destinationTasks.splice(destination.index, 0, movedTask);
+
+  const normalizeColumn = (columnTasks: Task[]) => {
+    columnTasks.forEach((task, index) => {
+      task.position = index + 1;
+    });
+  };
+
+  normalizeColumn(sourceTasks);
+  if (destinationTasks !== sourceTasks) {
+    normalizeColumn(destinationTasks);
+  }
+
+  return BOARD_STATUSES.flatMap((status) => grouped[status]);
+};
+
 export const useKanbanLogic = (
-  initialTasks: Task[],
+  tasks: Task[],
   setTasks: React.Dispatch<React.SetStateAction<Task[]>>,
-  activeProjectId: string,
   setError: (error: string | null) => void
 ) => {
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
   const handleDragEnd = useCallback(
     async (result: DropResult) => {
+      setIsDragging(false);
       const { destination, source, draggableId } = result;
 
-      if (!destination) return;
+      // If dropped outside a valid destination
+      if (!destination) {
+        return;
+      }
 
+      // If dropped in the same position
       if (
         destination.droppableId === source.droppableId &&
         destination.index === source.index
@@ -26,51 +87,21 @@ export const useKanbanLogic = (
       const newStatus = destination.droppableId as Status;
       const newIndex = destination.index;
 
-      // 1. Snapshot current state for rollback
-      const previousTasks = [...initialTasks];
+      // Snapshot current state for rollback
+      const previousTasks = tasks.map((task) => ({ ...task }));
 
-      // 2. Optimistic Update
-      setTasks((current) => {
-        const updated = [...current];
-        const taskToMoveIndex = updated.findIndex((t) => t.id === taskId);
-        if (taskToMoveIndex === -1) return current;
-
-        const [taskToMove] = updated.splice(taskToMoveIndex, 1);
-        taskToMove.status = newStatus;
-
-        // Group by column to find correct insertion point
-        const columnTasks = updated
-          .filter((t) => t.status === newStatus)
-          .sort((a, b) => (a.position || 0) - (b.position || 0));
-        
-        columnTasks.splice(newIndex, 0, taskToMove);
-
-        // Update positions for all tasks in the target column
-        columnTasks.forEach((t, i) => {
-          t.position = i + 1;
-        });
-
-        // If moved across columns, we might need to update positions in source column too
-        // but backend reorder logic handles that for us.
-        // For local state consistency, let's just update the whole list
-        return [
-          ...updated.filter((t) => t.status !== newStatus),
-          ...columnTasks
-        ];
-      });
-
-      // 3. API Call
       try {
+        setTasks((current) => reorderTasks(current, result));
+
         await taskService.reorder(taskId, newStatus, newIndex + 1);
       } catch (err: any) {
         console.error('Failed to reorder task:', err);
-        setError(err.response?.data?.error || 'Failed to sync task order. Rolling back...');
-        // Rollback on failure
+        setError(err.response?.data?.error || 'Failed to update task order');
         setTasks(previousTasks);
       }
     },
-    [initialTasks, setTasks, setError]
+    [tasks, setTasks, setError]
   );
 
-  return { handleDragEnd };
+  return { handleDragEnd, handleDragStart, isDragging };
 };

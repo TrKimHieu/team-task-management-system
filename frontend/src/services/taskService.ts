@@ -23,8 +23,10 @@ interface UpdateTaskData {
 }
 
 export const taskService = {
-  getAll: async (projectId?: string): Promise<Task[]> => {
-    const params = projectId ? { projectId } : {};
+  getAll: async (projectId?: string, options?: { page?: number; limit?: number }): Promise<Task[]> => {
+    const params: any = projectId ? { projectId } : {};
+    if (options?.page) params.page = options.page;
+    if (options?.limit) params.limit = options.limit;
     const response = await api.get<Task[]>('/tasks', { params });
     return response.data;
   },

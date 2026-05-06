@@ -1,11 +1,11 @@
 const express = require('express');
 const projectController = require('../controllers/project.controller');
-const { requireAuth, requireRole } = require('../middleware/auth.middleware');
+const { verifyToken, requireRole } = require('../middleware/auth.middleware');
 const { ROLES } = require('../constants');
 
 const router = express.Router();
 
-router.use(requireAuth);
+router.use(verifyToken);
 
 router.get('/', projectController.getAll);
 router.get('/:id', projectController.getById);

@@ -7,8 +7,16 @@ import { getAuthToken, onUnauthorized, setAuthToken } from './services/api';
 import { projectService, ProjectMember, ProjectStats } from './services/projectService';
 import { taskService } from './services/taskService';
 import { userService } from './services/userService';
+import { labelService } from './services/labelService';
+import { attachmentService } from './services/attachmentService';
 import { KanbanBoard } from './components/kanban/KanbanBoard';
 import { useKanbanLogic } from './hooks/useKanbanLogic';
+import { NotificationBell } from './components/NotificationBell';
+import { LabelSection } from './components/kanban/LabelSection';
+import { CommentSection } from './components/kanban/CommentSection';
+import { AttachmentSection } from './components/kanban/AttachmentSection';
+import { ActivitySection } from './components/kanban/ActivitySection';
+import { Pagination } from './components/Pagination';
 
 const THEME_KEY = 'teamtask_theme';
 const ROLE_OPTIONS: UserRole[] = ['member', 'leader', 'admin'];
@@ -25,6 +33,14 @@ type TaskForm = {
 };
 
 const emptyTaskForm: TaskForm = { title: '', description: '', status: 'todo', priority: 'medium', dueDate: '', assigneeIds: [] };
+const emptyTaskFilters = {
+  status: 'all',
+  priority: 'all',
+  assigneeId: 'all',
+  dueFrom: '',
+  dueTo: '',
+  onlyMine: false,
+} as const;
 
 function Modal({
   open,
@@ -90,6 +106,10 @@ export default function TeamTaskApp() {
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [projectForm, setProjectForm] = useState({ name: '', description: '', icon: '📁' });
   const [taskForm, setTaskForm] = useState<TaskForm>(emptyTaskForm);
+  const [projectPage, setProjectPage] = useState(1);
+  const [taskFilters, setTaskFilters] = useState({ ...emptyTaskFilters });
+  const [taskAttachments, setTaskAttachments] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<'details' | 'comments' | 'attachments' | 'labels' | 'activity'>('details');
   const [profileForm, setProfileForm] = useState({ name: '', avatar: '', color: COLORS[0], password: '' });
   const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
   const [projectStats, setProjectStats] = useState<ProjectStats | null>(null);
@@ -155,7 +175,7 @@ export default function TeamTaskApp() {
     if (!authUser || !activeProjectId) return;
     const loadTasks = async () => {
       try {
-        setTasks(await taskService.getAll(activeProjectId));
+        setTasks(await taskService.getAll(activeProjectId, { limit: 200 }));
       } catch (taskError: any) {
         setError(taskError.response?.data?.error || 'Failed to load tasks');
       }
@@ -163,10 +183,51 @@ export default function TeamTaskApp() {
     loadTasks();
   }, [authUser, activeProjectId]);
 
+  const activeProject = useMemo(() => projects.find((project) => project.id === activeProjectId) || null, [projects, activeProjectId]);
+  const filteredTasks = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+
+    return tasks.filter((task) => {
+      const searchMatch =
+        !normalizedSearch ||
+        `${task.title} ${task.description}`.toLowerCase().includes(normalizedSearch);
+      const statusMatch = taskFilters.status === 'all' || task.status === taskFilters.status;
+      const priorityMatch = taskFilters.priority === 'all' || task.priority === taskFilters.priority;
+      const assigneeMatch =
+        taskFilters.assigneeId === 'all' || task.assignees.some((assignee) => assignee.id === taskFilters.assigneeId);
+      const mineMatch = !taskFilters.onlyMine || (authUser ? isAssigned(task, authUser.id) : false);
+      const dueFromMatch = !taskFilters.dueFrom || (task.dueDate ? task.dueDate >= taskFilters.dueFrom : false);
+      const dueToMatch = !taskFilters.dueTo || (task.dueDate ? task.dueDate <= taskFilters.dueTo : false);
+
+      return searchMatch && statusMatch && priorityMatch && assigneeMatch && mineMatch && dueFromMatch && dueToMatch;
+    });
+  }, [authUser, search, taskFilters, tasks]);
+  const isBoardFiltered = filteredTasks.length !== tasks.length;
+  const taskModalTabs = editingTaskId
+    ? (['details', 'comments', 'attachments', 'labels', 'activity'] as const)
+    : (['details'] as const);
+  const PROJECTS_PER_PAGE = 6;
+  const totalProjectPages = Math.ceil(projects.length / PROJECTS_PER_PAGE);
+  const paginatedProjects = useMemo(
+    () => projects.slice((projectPage - 1) * PROJECTS_PER_PAGE, projectPage * PROJECTS_PER_PAGE),
+    [projectPage, projects]
+  );
+
   useEffect(() => {
     if (!authUser) return;
     setProfileForm({ name: authUser.name, avatar: authUser.avatar, color: authUser.color || COLORS[0], password: '' });
   }, [authUser]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const activeIndex = projects.findIndex((project) => project.id === activeProjectId);
+    if (activeIndex === -1) return;
+
+    const nextPage = Math.floor(activeIndex / PROJECTS_PER_PAGE) + 1;
+    if (nextPage !== projectPage) {
+      setProjectPage(nextPage);
+    }
+  }, [activeProjectId, projectPage, projects, PROJECTS_PER_PAGE]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -184,16 +245,6 @@ export default function TeamTaskApp() {
     };
     loadProjectData();
   }, [activeProjectId]);
-
-  const activeProject = useMemo(() => projects.find((project) => project.id === activeProjectId) || null, [projects, activeProjectId]);
-  const filteredTasks = useMemo(() => tasks.filter((task) => `${task.title} ${task.description}`.toLowerCase().includes(search.toLowerCase())), [tasks, search]);
-  const tasksByColumn = useMemo(() => {
-    const grouped: Record<Status, Task[]> = { 'todo': [], 'in-progress': [], 'done': [] };
-    filteredTasks.forEach(task => {
-      if (grouped[task.status]) grouped[task.status].push(task);
-    });
-    return grouped;
-  }, [filteredTasks]);
 
   const handleAuth = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -215,10 +266,36 @@ export default function TeamTaskApp() {
     setAuthUser(null);
   };
 
-  const openEditTask = (task: Task) => {
+  const openEditTask = async (task: Task) => {
     setEditingTaskId(task.id);
     setTaskForm({ title: task.title, description: task.description, status: task.status, priority: task.priority, dueDate: task.dueDate || '', assigneeIds: task.assignees.map((assignee) => assignee.id) });
+    setActiveTab('details');
+    loadTaskAttachments(task.id);
+    try {
+      const labels = await labelService.getTaskLabels(task.id);
+      setTasks((current) => current.map(t => t.id === task.id ? { ...t, labels } : t));
+    } catch (error) {
+      console.error('Failed to load task labels:', error);
+    }
     setTaskModalOpen(true);
+  };
+
+  const loadTaskAttachments = async (taskId: string) => {
+    try {
+      const data = await attachmentService.getByTaskId(taskId);
+      setTaskAttachments(data);
+    } catch (error) {
+      console.error('Failed to load attachments:', error);
+    }
+  };
+
+  const loadTaskLabels = async (taskId: string) => {
+    try {
+      const labels = await labelService.getTaskLabels(taskId);
+      setTasks((current) => current.map(t => t.id === taskId ? { ...t, labels } : t));
+    } catch (error) {
+      console.error('Failed to load task labels:', error);
+    }
   };
 
   const saveTask = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -231,7 +308,9 @@ export default function TeamTaskApp() {
       setTasks((current) => (editingTaskId ? current.map((task) => (task.id === editingTaskId ? savedTask : task)) : [...current, savedTask]));
       setTaskModalOpen(false);
       setEditingTaskId(null);
+      setActiveTab('details');
       setTaskForm(emptyTaskForm);
+      setTaskAttachments([]);
     } catch (taskError: any) {
       setError(taskError.response?.data?.error || 'Failed to save task');
     } finally {
@@ -337,7 +416,7 @@ export default function TeamTaskApp() {
     try {
       await taskService.updateStatus(taskId, status);
     } catch (taskError: any) {
-      const tasksData = await taskService.getAll(activeProjectId);
+      const tasksData = await taskService.getAll(activeProjectId, { limit: 200 });
       setTasks(tasksData);
       setError(taskError.response?.data?.error || 'Failed to update status');
     }
@@ -352,7 +431,7 @@ export default function TeamTaskApp() {
     }
   };
 
-  const { handleDragEnd } = useKanbanLogic(tasks, setTasks, activeProjectId, setError);
+  const { handleDragEnd } = useKanbanLogic(tasks, setTasks, setError);
 
   if (loading && !authUser) return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">Loading TeamTask...</div>;
 
@@ -427,7 +506,7 @@ export default function TeamTaskApp() {
               <p className={cn('text-xs uppercase tracking-[0.2em]', theme === 'dark' ? 'text-slate-500' : 'text-slate-400')}>Projects</p>
               {canManage(authUser, activeProject) && <button className={cn('rounded-lg p-1 transition-colors', theme === 'dark' ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100')} onClick={() => setProjectModalOpen(true)} type="button"><Plus size={16} /></button>}
             </div>
-            {projects.map((project) => (
+            {paginatedProjects.map((project) => (
               <div key={project.id} className="relative group">
                 <button className={cn('w-full rounded-2xl border px-4 py-3 text-left transition', activeProjectId === project.id ? 'border-blue-500 bg-blue-500/10' : theme === 'dark' ? 'border-slate-800 bg-slate-900 hover:border-slate-700' : 'border-slate-200 bg-white hover:border-slate-300')} onClick={() => setActiveProjectId(project.id)} type="button">
                   <div className="flex items-center gap-3">
@@ -449,6 +528,14 @@ export default function TeamTaskApp() {
                 )}
               </div>
             ))}
+            {totalProjectPages > 1 && (
+              <Pagination
+                currentPage={projectPage}
+                totalPages={totalProjectPages}
+                onPageChange={setProjectPage}
+                theme={theme}
+              />
+            )}
           </div>
           <div className="mt-6 space-y-2">
             <button className={cn('flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors', theme === 'dark' ? 'text-slate-400 hover:bg-slate-800 hover:text-slate-200' : 'text-slate-600 hover:bg-slate-100')} onClick={() => setProfileOpen(true)} type="button"><User size={16} />Open Profile</button>
@@ -468,6 +555,29 @@ export default function TeamTaskApp() {
                   <Search size={16} className="text-slate-400" />
                   <input className="w-full bg-transparent text-sm outline-none" placeholder="Search tasks" value={search} onChange={(event) => setSearch(event.target.value)} />
                 </label>
+                <select
+                  className={cn('rounded-xl border px-4 py-3 text-sm outline-none', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700')}
+                  value={taskFilters.status}
+                  onChange={(event) => setTaskFilters((current) => ({ ...current, status: event.target.value as typeof current.status }))}
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="todo">To Do</option>
+                  <option value="in-progress">In Progress</option>
+                  <option value="done">Done</option>
+                </select>
+                <select
+                  className={cn('rounded-xl border px-4 py-3 text-sm outline-none', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700')}
+                  value={taskFilters.priority}
+                  onChange={(event) => setTaskFilters((current) => ({ ...current, priority: event.target.value as typeof current.priority }))}
+                >
+                  <option value="all">All Priorities</option>
+                  {PRIORITIES.map((option) => (
+                    <option key={option} value={option}>
+                      {option[0].toUpperCase() + option.slice(1)}
+                    </option>
+                  ))}
+                </select>
+                <NotificationBell theme={theme} />
                 {canManage(authUser, activeProject) && (
                   <>
                     <button
@@ -486,69 +596,173 @@ export default function TeamTaskApp() {
                       <BarChart3 size={16} />
                       <span>Stats</span>
                     </button>
-                    <button className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white dark:bg-blue-600" onClick={() => { setEditingTaskId(null); setTaskForm(emptyTaskForm); setTaskModalOpen(true); }} type="button">Create Task</button>
+                    <button className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white dark:bg-blue-600" onClick={() => { setEditingTaskId(null); setActiveTab('details'); setTaskForm(emptyTaskForm); setTaskModalOpen(true); }} type="button">Create Task</button>
                   </>
                 )}
               </div>
             </div>
+            <div className="mt-4 flex flex-col gap-3 xl:flex-row xl:items-center">
+              <select
+                className={cn('rounded-xl border px-4 py-3 text-sm outline-none xl:min-w-52', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700')}
+                value={taskFilters.assigneeId}
+                onChange={(event) => setTaskFilters((current) => ({ ...current, assigneeId: event.target.value }))}
+              >
+                <option value="all">All Assignees</option>
+                {projectMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                className={cn('rounded-xl border px-4 py-3 text-sm outline-none', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700')}
+                type="date"
+                value={taskFilters.dueFrom}
+                onChange={(event) => setTaskFilters((current) => ({ ...current, dueFrom: event.target.value }))}
+              />
+              <input
+                className={cn('rounded-xl border px-4 py-3 text-sm outline-none', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700')}
+                type="date"
+                value={taskFilters.dueTo}
+                onChange={(event) => setTaskFilters((current) => ({ ...current, dueTo: event.target.value }))}
+              />
+              <label className={cn('flex items-center gap-3 rounded-xl border px-4 py-3 text-sm', theme === 'dark' ? 'border-slate-800 bg-slate-900 text-slate-300' : 'border-slate-200 bg-white text-slate-700')}>
+                <input
+                  checked={taskFilters.onlyMine}
+                  type="checkbox"
+                  onChange={(event) => setTaskFilters((current) => ({ ...current, onlyMine: event.target.checked }))}
+                />
+                Assigned to me
+              </label>
+              <button
+                className={cn('rounded-xl border px-4 py-3 text-sm font-medium transition-colors', theme === 'dark' ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}
+                onClick={() => {
+                  setSearch('');
+                  setTaskFilters({ ...emptyTaskFilters });
+                }}
+                type="button"
+              >
+                Clear Filters
+              </button>
+            </div>
           </div>
           {error && <div className={cn('px-6 pt-4', theme === 'dark' ? '' : '')}><div className={cn('rounded-xl border px-4 py-3 text-sm', theme === 'dark' ? 'border-rose-900/50 bg-rose-950/50 text-rose-400' : 'border-rose-200 bg-rose-50 text-rose-700')}>{error}</div></div>}
+          {isBoardFiltered && (
+            <div className="px-6 pt-4">
+              <div className={cn('rounded-xl border px-4 py-3 text-sm', theme === 'dark' ? 'border-amber-900/40 bg-amber-950/30 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700')}>
+                Drag and drop is temporarily disabled while filters are active so task positions stay consistent.
+              </div>
+            </div>
+          )}
           
           <div className="flex-1 overflow-hidden">
             {activeProjectId ? (
-              <KanbanBoard
-                tasks={filteredTasks}
-                theme={theme}
-                authUser={authUser}
-                onDragEnd={handleDragEnd}
-                onAddTask={(status) => {
-                  setEditingTaskId(null);
-                  setTaskForm({ ...emptyTaskForm, status });
-                  setTaskModalOpen(true);
-                }}
-                onEditTask={openEditTask}
-                onDeleteTask={removeTask}
-                onToggleComplete={toggleTaskComplete}
-              />
+               <KanbanBoard
+                 tasks={filteredTasks}
+                 theme={theme}
+                 authUser={authUser}
+                 onDragEnd={handleDragEnd}
+                 isDragDisabled={isBoardFiltered}
+                 onAddTask={(status) => {
+                   setEditingTaskId(null);
+                   setActiveTab('details');
+                   setTaskForm({ ...emptyTaskForm, status });
+                   setTaskModalOpen(true);
+                 }}
+                 onEditTask={openEditTask}
+                 onDeleteTask={removeTask}
+                 onToggleComplete={toggleTaskComplete}
+                 onTaskUpdate={(task) => {
+                   if (editingTaskId) loadTaskLabels(editingTaskId);
+                 }}
+               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-4">
                 <KanbanIcon size={48} className="opacity-20" />
                 <p>Select or create a project to start managing tasks.</p>
               </div>
             )}
-          </div>
+           </div>
         </main>
       </div>
-      <Modal open={taskModalOpen} title={editingTaskId ? 'Edit Task' : 'Create Task'} onClose={() => setTaskModalOpen(false)} theme={theme}>
-        <form className="space-y-4" onSubmit={saveTask}>
-          <input className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" placeholder="Task title" value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} />
-          <textarea className="min-h-24 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" placeholder="Description" value={taskForm.description} onChange={(event) => setTaskForm((current) => ({ ...current, description: event.target.value }))} />
-          <div className="grid gap-4 sm:grid-cols-3">
-            <select className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={taskForm.status} onChange={(event) => setTaskForm((current) => ({ ...current, status: event.target.value as Status }))}>
-              <option value="todo">To Do</option>
-              <option value="in-progress">In Progress</option>
-              <option value="done">Done</option>
-            </select>
-            <select className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value as Priority }))}>{PRIORITIES.map((option) => <option key={option} value={option}>{option}</option>)}</select>
-            <input className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" type="date" value={taskForm.dueDate} onChange={(event) => setTaskForm((current) => ({ ...current, dueDate: event.target.value }))} />
+      <Modal open={taskModalOpen} title={editingTaskId ? 'Edit Task' : 'Create Task'} onClose={() => { setTaskModalOpen(false); setActiveTab('details'); setTaskAttachments([]); }} theme={theme}>
+        <div className="space-y-4">
+          <div className="flex gap-1 border-b" style={{ borderColor: theme === 'dark' ? '#334155' : '#e2e8f0' }}>
+            {taskModalTabs.map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 ${
+                  activeTab === tab
+                    ? 'border-blue-500 text-blue-500'
+                    : 'border-transparent hover:text-slate-600 dark:hover:text-slate-300'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
           </div>
-          <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-            <div className="mb-3 flex items-center gap-2"><Users size={16} /><p className="text-sm font-medium">Assignees</p></div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {users.map((user) => {
-                const checked = taskForm.assigneeIds.includes(user.id);
-                return (
-                  <label key={user.id} className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-700">
-                    <input checked={checked} type="checkbox" onChange={() => setTaskForm((current) => ({ ...current, assigneeIds: checked ? current.assigneeIds.filter((assigneeId) => assigneeId !== user.id) : [...current.assigneeIds, user.id] }))} />
-                    <span className={cn('flex h-8 w-8 items-center justify-center rounded-full text-xs text-white', user.color)}>{user.avatar}</span>
-                    <span className="text-sm">{user.name}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          <button className="w-full rounded-xl bg-slate-900 px-4 py-3 font-medium text-white dark:bg-blue-600" disabled={submitting} type="submit">{submitting ? 'Saving...' : editingTaskId ? 'Save Changes' : 'Create Task'}</button>
-        </form>
+
+          {activeTab === 'details' && (
+            <form className="space-y-4" onSubmit={saveTask}>
+              <input className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" placeholder="Task title" value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} />
+              <textarea className="min-h-24 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" placeholder="Description" value={taskForm.description} onChange={(event) => setTaskForm((current) => ({ ...current, description: event.target.value }))} />
+              <div className="grid gap-4 sm:grid-cols-3">
+                <select className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={taskForm.status} onChange={(event) => setTaskForm((current) => ({ ...current, status: event.target.value as Status }))}>
+                  <option value="todo">To Do</option>
+                  <option value="in-progress">In Progress</option>
+                  <option value="done">Done</option>
+                </select>
+                <select className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value as Priority }))}>{PRIORITIES.map((option) => <option key={option} value={option}>{option}</option>)}</select>
+                <input className="rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" type="date" value={taskForm.dueDate} onChange={(event) => setTaskForm((current) => ({ ...current, dueDate: event.target.value }))} />
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+                <div className="mb-3 flex items-center gap-2"><Users size={16} /><p className="text-sm font-medium">Assignees</p></div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {users.map((user) => {
+                    const checked = taskForm.assigneeIds.includes(user.id);
+                    return (
+                      <label key={user.id} className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 dark:border-slate-700">
+                        <input checked={checked} type="checkbox" onChange={() => setTaskForm((current) => ({ ...current, assigneeIds: checked ? current.assigneeIds.filter((assigneeId) => assigneeId !== user.id) : [...current.assigneeIds, user.id] }))} />
+                        <span className={cn('flex h-8 w-8 items-center justify-center rounded-full text-xs text-white', user.color)}>{user.avatar}</span>
+                        <span className="text-sm">{user.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <button className="w-full rounded-xl bg-slate-900 px-4 py-3 font-medium text-white dark:bg-blue-600" disabled={submitting} type="submit">{submitting ? 'Saving...' : editingTaskId ? 'Save Changes' : 'Create Task'}</button>
+            </form>
+          )}
+
+          {activeTab === 'comments' && editingTaskId && (
+            <CommentSection taskId={editingTaskId} theme={theme} authUser={authUser} />
+          )}
+
+          {activeTab === 'attachments' && editingTaskId && (
+            <AttachmentSection
+              taskId={editingTaskId}
+              attachments={taskAttachments}
+              theme={theme}
+              onUpdate={() => editingTaskId && loadTaskAttachments(editingTaskId)}
+            />
+          )}
+
+          {activeTab === 'labels' && editingTaskId && activeProjectId && (
+            <LabelSection
+              taskId={editingTaskId}
+              projectId={activeProjectId}
+              theme={theme}
+              onUpdate={() => {
+                loadTaskLabels(editingTaskId);
+              }}
+            />
+          )}
+
+          {activeTab === 'activity' && editingTaskId && (
+            <ActivitySection taskId={editingTaskId} theme={theme} />
+          )}
+        </div>
       </Modal>
       <Modal open={projectModalOpen} title="Create Project" onClose={() => setProjectModalOpen(false)} theme={theme}>
         <form className="space-y-4" onSubmit={saveProject}>

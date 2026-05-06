@@ -19,6 +19,7 @@ const requireAuth = (req, res, next) => {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET || 'teamtask-dev-secret');
     req.auth = payload;
+    req.user = { id: payload.userId, email: payload.email, role: payload.role, name: payload.name };
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -59,7 +60,7 @@ const requireTaskAssignmentOrElevatedRole = (taskService) => async (req, res, ne
 };
 
 module.exports = {
-  requireAuth,
+  verifyToken: requireAuth,
   requireRole,
   requireTaskAssignmentOrElevatedRole,
 };

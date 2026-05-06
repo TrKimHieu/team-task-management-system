@@ -44,12 +44,16 @@ const getColumnsByProjectId = async (projectId) => {
   }));
 };
 
-const getAll = async (authUser) => {
+const getAll = async (authUser, options = {}) => {
+  const { page = 1, limit = 20 } = options;
+  const offset = (page - 1) * limit;
+
   const result = await db.query(`
     SELECT p.*, (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) as member_count
-    FROM projects p 
+    FROM projects p
     ORDER BY p.created_at DESC
-  `);
+    LIMIT $1 OFFSET $2
+  `, [limit, offset]);
   return result.rows.map((row) => normalizeProject(row, authUser.role));
 };
 

@@ -1,7 +1,12 @@
 const db = require('../config/db').pool;
 
 const mapTaskRow = (row) => {
+  if (!row) {
+    return null;
+  }
+
   const assignees = row.assignees_json || [];
+  const labels = row.labels_json || [];
   return {
     id: row.id,
     projectId: row.project_id,
@@ -17,28 +22,45 @@ const mapTaskRow = (row) => {
     updatedAt: row.updated_at ? new Date(row.updated_at).getTime() : null,
     completed: row.completed || false,
     assignees,
+    labels,
   };
 };
 
 const getTaskBaseQuery = () => `
   SELECT
     t.*,
-    COALESCE(
-      json_agg(
-        DISTINCT jsonb_build_object(
-          'id', u.id,
-          'name', u.name,
-          'email', u.email,
-          'role', u.role,
-          'avatar', COALESCE(u.avatar, UPPER(LEFT(u.name, 2))),
-          'color', COALESCE(u.color, 'bg-slate-500')
-        )
-      ) FILTER (WHERE u.id IS NOT NULL),
-      '[]'::json
-    ) AS assignees_json
+    COALESCE(assignees.assignees_json, '[]'::json) AS assignees_json,
+    COALESCE(labels.labels_json, '[]'::json) AS labels_json
   FROM tasks t
-  LEFT JOIN task_assignees ta ON ta.task_id = t.id
-  LEFT JOIN users u ON u.id = ta.user_id
+  LEFT JOIN LATERAL (
+    SELECT json_agg(
+      DISTINCT jsonb_build_object(
+        'id', u.id,
+        'name', u.name,
+        'email', u.email,
+        'role', u.role,
+        'avatar', COALESCE(u.avatar, UPPER(LEFT(u.name, 2))),
+        'color', COALESCE(u.color, 'bg-slate-500')
+      )
+    ) FILTER (WHERE u.id IS NOT NULL) AS assignees_json
+    FROM task_assignees ta
+    JOIN users u ON u.id = ta.user_id
+    WHERE ta.task_id = t.id
+  ) assignees ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT json_agg(
+      DISTINCT jsonb_build_object(
+        'id', l.id,
+        'project_id', l.project_id,
+        'name', l.name,
+        'color', l.color,
+        'created_at', l.created_at
+      )
+    ) FILTER (WHERE l.id IS NOT NULL) AS labels_json
+    FROM task_label_assignments tla
+    JOIN task_labels l ON l.id = tla.label_id
+    WHERE tla.task_id = t.id
+  ) labels ON TRUE
 `;
 
 const getColumnIdForStatus = async (projectId, status, client = db) => {
@@ -54,7 +76,9 @@ const getColumnIdForStatus = async (projectId, status, client = db) => {
   return result.rows[0]?.id || null;
 };
 
-const getAll = async (projectId = null) => {
+const getAll = async (projectId = null, options = {}) => {
+  const { page = 1, limit = 20 } = options;
+  const offset = (page - 1) * limit;
   const params = [];
   let whereClause = '';
   if (projectId) {
@@ -62,26 +86,44 @@ const getAll = async (projectId = null) => {
     whereClause = 'WHERE t.project_id = $1';
   }
 
+  const limitParam = params.length + 1;
+  const offsetParam = params.length + 2;
+  params.push(limit, offset);
+
   const result = await db.query(
     `${getTaskBaseQuery()}
      ${whereClause}
-     GROUP BY t.id
-     ORDER BY t.status ASC, t.position ASC, t.created_at DESC`,
+     ORDER BY t.status ASC, t.position ASC, t.created_at DESC
+     LIMIT $${limitParam} OFFSET $${offsetParam}`,
     params
   );
 
   return result.rows.map(mapTaskRow);
 };
 
+const getTaskWithLabels = async (id) => {
+  return getById(id);
+};
+
 const getById = async (id) => {
   const result = await db.query(
     `${getTaskBaseQuery()}
-     WHERE t.id = $1
-     GROUP BY t.id`,
+     WHERE t.id = $1`,
     [id]
   );
 
   return mapTaskRow(result.rows[0]);
+};
+
+const getTaskAssigneeIds = async (taskId, client = db) => {
+  const result = await client.query(
+    `SELECT user_id
+     FROM task_assignees
+     WHERE task_id = $1`,
+    [taskId]
+  );
+
+  return result.rows.map((row) => row.user_id);
 };
 
 const replaceAssignees = async (client, taskId, assigneeIds = []) => {
@@ -301,10 +343,12 @@ const isUserAssigned = async (taskId, userId) => {
 module.exports = {
   getAll,
   getById,
+  getTaskWithLabels,
   create,
   update,
   updateStatus,
   reorder,
   remove,
+  getTaskAssigneeIds,
   isUserAssigned,
 };

@@ -2,7 +2,8 @@ const projectService = require('../services/project.service');
 
 const getAll = async (req, res) => {
   try {
-    const projects = await projectService.getAll(req.auth);
+    const { page = 1, limit = 20 } = req.query;
+    const projects = await projectService.getAll(req.auth, { page: parseInt(page), limit: parseInt(limit) });
     res.json(projects);
   } catch (error) {
     res.status(500).json({ error: error.message });

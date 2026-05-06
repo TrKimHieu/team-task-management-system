@@ -1,17 +1,19 @@
 import React, { memo } from 'react';
 import { Draggable } from '@hello-pangea/dnd';
-import { Calendar, Clock, AlertCircle, MessageSquare, MoreHorizontal, Edit2, Trash2, CheckCircle2 } from 'lucide-react';
+import { Calendar, Clock, AlertCircle, MessageSquare, MoreHorizontal, Edit2, Trash2, CheckCircle2, Tag } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { Task, ThemeMode, Status, Priority, AuthUser } from '../../types';
+import { Task, ThemeMode, Status, Priority, AuthUser, Label } from '../../types';
 
 interface TaskCardProps {
   task: Task;
   index: number;
   theme: ThemeMode;
   authUser: AuthUser;
+  isDragDisabled?: boolean;
   onEdit: (task: Task) => void;
   onDelete: (taskId: string) => void;
   onToggleComplete: (taskId: string, completed: boolean) => void;
+  onTaskUpdate?: (task: Task) => void;
 }
 
 const PriorityBadge = ({ priority }: { priority: Priority }) => {
@@ -28,13 +30,13 @@ const PriorityBadge = ({ priority }: { priority: Priority }) => {
   );
 };
 
-export const TaskCard = memo(({ task, index, theme, authUser, onEdit, onDelete, onToggleComplete }: TaskCardProps) => {
+export const TaskCard = memo(({ task, index, theme, authUser, isDragDisabled = false, onEdit, onDelete, onToggleComplete, onTaskUpdate }: TaskCardProps) => {
   const isOverdue = task.dueDate && !task.completed && new Date(task.dueDate) < new Date(new Date().setHours(0,0,0,0));
   const isLeader = ['leader', 'admin'].includes(authUser.role);
   const canModify = isLeader || task.assignees.some(a => a.id === authUser.id);
 
   return (
-    <Draggable draggableId={task.id} index={index}>
+    <Draggable draggableId={task.id} index={index} isDragDisabled={isDragDisabled}>
       {(provided, snapshot) => (
         <div
           ref={provided.innerRef}
@@ -103,7 +105,7 @@ export const TaskCard = memo(({ task, index, theme, authUser, onEdit, onDelete, 
             </div>
           </div>
 
-          <div className="flex items-center justify-between mt-auto pt-3 border-t border-slate-100 dark:border-slate-800/50">
+           <div className="flex items-center justify-between mt-auto pt-3 border-t border-slate-100 dark:border-slate-800/50">
             <div className="flex items-center gap-3">
               {task.dueDate && (
                 <div className={cn(
@@ -114,6 +116,20 @@ export const TaskCard = memo(({ task, index, theme, authUser, onEdit, onDelete, 
                 )}>
                   <Calendar size={12} />
                   <span>{new Date(task.dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                </div>
+              )}
+              {task.labels && task.labels.length > 0 && (
+                <div className="flex gap-1 flex-wrap">
+                  {task.labels.slice(0, 2).map((label: Label) => (
+                    <span key={label.id} className={`px-1.5 py-0.5 rounded text-[9px] text-white ${label.color}`}>
+                      {label.name}
+                    </span>
+                  ))}
+                  {task.labels.length > 2 && (
+                    <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400">
+                      +{task.labels.length - 2}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
